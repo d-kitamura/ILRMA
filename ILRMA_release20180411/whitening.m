@@ -45,7 +45,7 @@ function Y = whitening(X, dnum)
 %
 
 [I,J,M] = size(X);
-Y = zeros(I,J,M);
+Y = zeros(I,J,dnum);
 for i=1:I
     Xi = squeeze(X(i,:,:)).'; % M x J
     V = Xi*(Xi')/J; % covariance matrix
