@@ -2,7 +2,7 @@
 % Sample program for blind source separation using independent low-rank   %
 % matrix analysis (ILRMA)                                                 %
 %                                                                         %
-% Coded by D. Kitamura (d-kitamura@ieee.org) on 1 Apr, 2018 (ver1.0).     %
+% Coded by D. Kitamura (d-kitamura@ieee.org)                              %
 %                                                                         %
 % Copyright 2018 Daichi Kitamura                                          %
 %                                                                         %
@@ -27,7 +27,7 @@
 %                                                                         %
 % See also:                                                               %
 % http://d-kitamura.net                                                   %
-% http://d-kitamura.net/en/demo_rank1_en.htm                              %
+% http://d-kitamura.net/demo-ILRMA_en.html                                %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 clear;
