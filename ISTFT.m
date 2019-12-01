@@ -1,159 +1,144 @@
-function waveform = ISTFT(S, shiftSize, window, length)
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Short-time Fourier transform (STFT)                                     %
-% Both monaural and multichannel signals are supported.                   %
-%                                                                         %
-% Coded by D. Kitamura (d-kitamura@ieee.org) on 1 Apr, 2018 (ver1.0).     %
-%                                                                         %
-% Copyright 2018 Daichi Kitamura                                          %
-%                                                                         %
-% These programs are distributed only for academic research at            %
-% universities and research institutions.                                 %
-% It is not allowed to use or modify these programs for commercial or     %
-% industrial purpose without our permission.                              %
-% When you use or modify these programs and write research articles,      %
-% cite the following references:                                          %
-%                                                                         %
-% # Original paper (The algorithm was called "Rank-1 MNMF" in this paper) %
-% D. Kitamura, N. Ono, H. Sawada, H. Kameoka, H. Saruwatari, "Determined  %
-% blind source separation unifying independent vector analysis and        %
-% nonnegative matrix factorization," IEEE/ACM Trans. ASLP, vol. 24,       %
-% no. 9, pp. 1626-1641, September 2016.                                   %
-%                                                                         %
-% # Book chapter (The algorithm was renamed as "ILRMA")                   %
-% D. Kitamura, N. Ono, H. Sawada, H. Kameoka, H. Saruwatari, "Determined  %
-% blind source separation with independent low-rank matrix analysis,"     %
-% Audio Source Separation. Signals and Communication Technology.,         %
-% S. Makino, Ed. Springer, Cham, pp. 125-155, March 2018.                 %
-%                                                                         %
-% See also:                                                               %
-% http://d-kitamura.net                                                   %
-% http://d-kitamura.net/en/demo_rank1_en.htm                              %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function waveform = ISTFT(spectrogram, shiftSize, window, orgLength)
+%
+% Inverse short-time Fourier transform
+% Synthesis window is calculated based on minimal distortion principle,
+% which is described below:
+% D. Griffin and J. Lim, "Signal estimation from modified short-time
+% Fourier transform," IEEE Transactions on Acoustics, Speech, and Signal
+% Processing, vol. 32, no. 2, pp. 236-243, 1984.
+%
+% Coded by D. Kitamura (d-kitamura@ieee.org)
+%
+% See also:
+% http://d-kitamura.net
 %
 % [syntax]
-%   waveform = ISTFT(S)
-%   waveform = ISTFT(S, shiftSize)
-%   waveform = ISTFT(S, shiftSize, window)
-%   waveform = ISTFT(S, shiftSize, window, length)
+%   waveform = ISTFT(spectrogram)
+%   waveform = ISTFT(spectrogram,shiftSize)
+%   waveform = ISTFT(spectrogram,shiftSize,window)
+%   waveform = ISTFT(spectrogram,shiftSize,window,orgLength)
 %
 % [inputs]
-%           S: STFT of input signal (frequency bin (fftSize/2+1) x time frame x channel)
-%   shiftSize: frame shift length (default: fftSize/2)
-%      window: window function used in STFT (fftSize x 1) or choose used function from below:
-%              'hamming'    : Hamming window (default)
-%              'hann'       : von Hann window
-%              'rectangular': rectangular window
-%              'blackman'   : Blackman window
-%              'sine'       : sine window
-%      length: length of original signal (before STFT) (default: the same as that of output signal)
+%  spectrogram: STFT of input signal (frequency bins (fftSize/2+1) x time frames x channels)
+%    shiftSize: frame shift length (default: fftSize/2)
+%       window: analysis window function used in STFT (fftSize x 1) or choose used analysis window function from below:
+%               'hamming'    : Hamming window (default)
+%               'hann'       : von Hann window
+%               'rectangular': rectangular window
+%               'blackman'   : Blackman window
+%               'sine'       : sine window
+%    orgLength: length of original signal (before zero padding) (default: the same as that of output signal)
 %
 % [outputs]
-%   waveform: time-domain waveform of the input spectrogram (signal x channel)
+%   waveform: time-domain waveform of input spectrogram (signal x channels)
 %
 
 % Check errors and set default values
 if (nargin < 1)
     error('Too few input arguments.\n');
 end
-[freq, frames, nch] = size(S);
-if (nch > freq)
-    error('The input spectrogram might be wrong. The size of it must be (freq x frame x ch).\n');
+[nfreqs, nframes, nch] = size(spectrogram);
+if (nch > nfreqs)
+    error('Input spectrogram might be wrong. The size of it must be (freq x frame x ch).\n');
 end
-if (isreal(S) == 1)
-    error('The input spectrogram might be wrong. It does not complex-valued matrix.\n');
+if (isreal(spectrogram) == 1)
+    error('Input spectrogram might be wrong. It does not complex-valued matrix.\n');
 end
-if (mod(freq,2) == 0)
-    error('The number of rows of the first argument must be an odd number because it is (frame length /2)+1.\n');
+if (mod(nfreqs,2) == 0)
+    error('The number of rows of sectrogram must be an odd number because it is (fftSize/2)+1.\n');
 end
-fftSize = (freq-1) * 2;
+fftSize = (nfreqs-1) * 2; % fft length used in STFT
 if (nargin < 2)
     shiftSize = fftSize/2;
 elseif (mod(fftSize,shiftSize) ~= 0)
-    error('The frame length must be dividable by the second argument.\n');
+    error('fftSize must be dividable by shiftSize.\n');
 end
 if (nargin<3)
-    window = hamming_local(fftSize); % default window
+    analyWindow = hamming_local(fftSize); % default window
 else
     if (isnumeric(window))
         if (size(window, 1) ~= fftSize)
-            error('The length of the third argument must be the same as FFT size used in STFT.\n');
+            error('The length of synthesis window must be the same as fftSize used in STFT.\n');
+        else
+            analyWindow = window;
         end
     else
         switch window
             case 'hamming'
-                window = hamming_local(fftSize);
+                analyWindow = hamming_local(fftSize);
             case 'hann'
-                window = hann_local(fftSize);
+                analyWindow = hann_local(fftSize);
             case 'rectangular'
-                window = rectangular_local(fftSize);
+                analyWindow = rectangular_local(fftSize);
             case 'blackman'
-                window = blackman_local(fftSize);
+                analyWindow = blackman_local(fftSize);
             case 'sine'
-                window = sine_local(fftSize);
+                analyWindow = sine_local(fftSize);
             otherwise
-                error('Unsupported window is required. Type "help STFT" and check options.\n')
+                error('Input window type is not supported. Type "help ISTFT" and check options.\n')
         end
     end
 end
-invWindow = optSynWnd_local( window, shiftSize );
+
+% Calculate optimal synthesis window based on minimal distortion principle
+synthWindow = optSynthWnd_local( analyWindow, shiftSize );
 
 % Inverse STFT
-spectrum = zeros(fftSize,1);
-tmpSignal = zeros((frames-1)*shiftSize+fftSize,nch);
+spectrum = zeros(fftSize,1); % memory allocation
+tmpSignal = zeros((nframes-1)*shiftSize+fftSize,nch); % memory allocation (zero-padded signal length x nch)
 for ch = 1:nch
-    for i = 1:frames
-        spectrum(1:fftSize/2+1,1) = S(:,i,ch);
-        spectrum(1,1) = spectrum(1,1)/2;
-        spectrum(fftSize/2+1,1) = spectrum(fftSize/2+1,1)/2;
-        sp = (i-1)*shiftSize;
-        tmpSignal(sp+1:sp+fftSize,ch) = tmpSignal(sp+1:sp+fftSize,ch) + real(ifft(spectrum,fftSize).*invWindow)*2;
+    for n = 1:nframes
+        spectrum(1:fftSize/2+1,1) = spectrogram(:,n,ch);
+        spectrum(1,1) = spectrum(1,1)/2; % 0Hz component
+        spectrum(fftSize/2+1,1) = spectrum(fftSize/2+1,1)/2; % Nyquist frequency component
+        startPoint = (n-1)*shiftSize;
+        tmpSignal(startPoint+1:startPoint+fftSize,ch) = tmpSignal(startPoint+1:startPoint+fftSize,ch) + real(ifft(spectrum,fftSize).*synthWindow)*2;
     end
 end
-waveform = tmpSignal(fftSize-shiftSize+1:(frames-1)*shiftSize+fftSize,:); % discard padded zeros in STFT
+waveform = tmpSignal(fftSize-shiftSize+1:(nframes-1)*shiftSize+fftSize,:); % discard padded zeros in pre-processing of STFT
 
 % Discarding padded zeros in the end of the signal
 if (nargin==4)
-    waveform = waveform(1:length,:);
+    waveform = waveform(1:orgLength,:);
 end
 end
 
 %% Local functions
-function window = hamming_local(fftSize)
-t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
-window = 0.54*ones(fftSize,1) - 0.46*cos(2.0*pi*t(1:fftSize));
-end
-
-function window = hann_local(fftSize)
-t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
-window = max(0.5*ones(fftSize,1) - 0.5*cos(2.0*pi*t(1:fftSize)),eps);
-end
-
-function window = rectangular_local(fftSize)
-window = ones(fftSize,1);
-end
-
-function window = blackman_local(fftSize)
-t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
-window = max(0.42*ones(fftSize,1) - 0.5*cos(2.0*pi*t(1:fftSize)) + 0.08*cos(4.0*pi*t(1:fftSize)),eps);
-end
-
-function window = sine_local(fftSize)
-t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
-window = max(sin(pi*t(1:fftSize)),eps);
-end
-
-function synthesizedWindow = optSynWnd_local(analysisWindow,shiftSize) % based on minimum distortion
-fftSize = size(analysisWindow,1);
-synthesizedWindow = zeros(fftSize,1);
+function synthWindow = optSynthWnd_local(analyWindow,shiftSize) % based on minimal distortion principle
+fftSize = size(analyWindow,1);
+synthWindow = zeros(fftSize,1);
 for i = 1:shiftSize
-    amp = 0.0;
+    amp = 0;
     for j = 1:fftSize/shiftSize
-        amp = amp + analysisWindow(i+(j-1)*shiftSize,1)*analysisWindow(i+(j-1)*shiftSize,1);
+        amp = amp + analyWindow(i+(j-1)*shiftSize,1)*analyWindow(i+(j-1)*shiftSize,1);
     end
     for j = 1:fftSize/shiftSize
-        synthesizedWindow(i+(j-1)*shiftSize,1) = analysisWindow(i+(j-1)*shiftSize,1)/amp;
+        synthWindow(i+(j-1)*shiftSize,1) = analyWindow(i+(j-1)*shiftSize,1)/amp;
     end
 end
+end
+
+function analyWindow = hamming_local(fftSize)
+t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
+analyWindow = 0.54*ones(fftSize,1) - 0.46*cos(2.0*pi*t(1:fftSize));
+end
+
+function analyWindow = hann_local(fftSize)
+t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
+analyWindow = max(0.5*ones(fftSize,1) - 0.5*cos(2.0*pi*t(1:fftSize)),eps);
+end
+
+function analyWindow = rectangular_local(fftSize)
+analyWindow = ones(fftSize,1);
+end
+
+function analyWindow = blackman_local(fftSize)
+t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
+analyWindow = max(0.42*ones(fftSize,1) - 0.5*cos(2.0*pi*t(1:fftSize)) + 0.08*cos(4.0*pi*t(1:fftSize)),eps);
+end
+
+function analyWindow = sine_local(fftSize)
+t = linspace(0,1,fftSize+1).'; % periodic (produce L+1 window and return L window)
+analyWindow = max(sin(pi*t(1:fftSize)),eps);
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% EOF %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
