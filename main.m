@@ -64,7 +64,9 @@ end
 
 % Blind source separation based on ILRMA
 [sep, cost] = bss_ILRMA(mix,ns,nb,fftSize,shiftSize,it,type,refMic,drawConv,normalize);
-% [sep, cost] = bss_ILRMA_readable(mix,ns,nb,fftSize,shiftSize,it,type,refMic,drawConv,normalize);
+
+% Blind source separation based on consistent ILRMA
+% [sep, cost] = bss_consistentILRMA(mix,nb,fftSize,shiftSize,it,refMic,drawConv);
 
 % Output separated signals
 outputDir = sprintf('./output');
