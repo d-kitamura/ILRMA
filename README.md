@@ -4,16 +4,18 @@
 Sample MATLAB script for independent low-rank matrix analysis (ILRMA) and its application to blind audio source separation.
 
 ## Contents
-- input [dir]:		includes test audio signals (reverberation time is around 300 ms)
-- reference [dir]:	includes reference documents for ILRMA
-- bss_ILRMA.m:		apply pre- and post-processing for blind source separation (STFT, whitening, ILRMA, back projection, and ISTFT)
-- ILRMA.m:			function of ILRMA (fast and heuristic implementation)
-- ILRMA_readable.m:	function of ILRMA (slow but somewhat readable implementation)
-- ISTFT.m:			inverse short-time Fourier transform
-- main.m:			main script with parameter settings
-- backProjection.m:	back projection technique (fixing frequency-wise scales)
-- STFT.m:			short-time Fourier transform
-- whitening.m:		applying principal component analysis for decorrelating observed multichannel signal
+- input [dir]:		        includes test audio signals (reverberation time is around 300 ms)
+- reference [dir]:	        includes reference documents for ILRMA
+- bss_ILRMA.m:		        apply pre- and post-processing for blind source separation (STFT, whitening, ILRMA, back projection, and ISTFT)
+- bss_consistentILRMA.m:	apply pre- and post-processing for blind source separation (STFT, whitening, ILRMA, back projection, and ISTFT)
+- consistentILRMA.m:        function of consistent ILRMA
+- ILRMA.m:			        function of ILRMA (fast and heuristic implementation)
+- ILRMA_readable.m:	        function of ILRMA (slow but somewhat readable implementation)
+- ISTFT.m:			        inverse short-time Fourier transform
+- main.m:			        main script with parameter settings
+- backProjection.m:	        back projection technique (fixing frequency-wise scales)
+- STFT.m:			        short-time Fourier transform
+- whitening.m:		        applying principal component analysis for decorrelating observed multichannel signal
 
 ## Usage Note
 A parameter "normalize" in 47th line of main.m is important.  
