@@ -1,317 +1,228 @@
-function [Y, cost, W] = consistentILRMA(X, It, nb, fftSize, shiftSize, window, mixLen, refMic, drawConv, W, T, V)
-% Independent low-rank matrix analysis (ILRMA)
+function [estSig, cost] = consistentILRMA(mixSig, nSrc, sampFreq, nBases, fftSize, shiftSize, windowType, nIter, refMic, applyWhitening, drawConv)
+% Blind source separation with independent low-rank matrix analysis (ILRMA) 
+% using spectrogram consistency
+%
+% Coded by D. Kitamura (d-kitamura@ieee.org)
+%
+% Copyright 2020 Daichi Kitamura
+%
+% These programs are distributed only for academic research at
+% universities and research institutions.
+% It is not allowed to use or modify these programs for commercial or
+% industrial purpose without our permission.
+% When you use or modify these programs and write research articles,
+% cite the following references:
+%
+% # Original paper
+% D. Kitamura and K. Yatabe, "Consistent independent low-rank matrix 
+% analysis for determined blind source separation," EURASIP J. Adv. Signal 
+% Process., vol. 2020, no. 46, p. 35, November 2020.
+%
+% See also:
+% http://d-kitamura.net
+% http://d-kitamura.net/demo-ILRMA_en.html
 %
 % [syntax]
-%   [Y, cost, W] = consistentILRMA(X, It, nb, fftSize, shiftSize, window, mix, refMic)
-%   [Y, cost, W] = consistentILRMA(X, It, nb, fftSize, shiftSize, window, mix, refMic, W)
-%   [Y, cost, W] = consistentILRMA(X, It, nb, fftSize, shiftSize, window, mix, refMic, W, T)
-%   [Y, cost, W] = consistentILRMA(X, It, nb, fftSize, shiftSize, window, mix, refMic, W, T, V)
+%   [estSig,cost] = consistentILRMA(mixSig,nSrc,nBases,fftSize,shiftSize,nIter,type,refMic,applyNormalize,applyWhitening,drawConv)
 %
 % [inputs]
-%          X: input multichannel signals in time-frequency domain (frequency bin x time frame x channel)
-%         It: number of iterations
-%         nb: number of bases for each source in ILRMA1, or number of bases for all the sources in ILRMA2
-%    fftSize: fft length in STFT
-%  shiftSize: window shift size in STFT
-%     window: window function in STFT
-%     mixLen: length of mixture signal in waveform domain
-%     refMic: reference microphone for projection back
-%   drawConv: calculate values of cost function in each iteration for drawing convergence curve or not (true or false, default: false)
-%          W: initial demixing matrix (source x channel x frequency bin, default: identity matrices)
-%          T: initial basis matrix (frequency bin x basis x source in ILRMA1, frequency bin x basis for ILRMA2, default: uniform random matrices)
-%          V: initial activation matrix (basis x time frame x source in ILRMA1, basis x time frame for ILRMA2, default: uniform random matrices)
+%         mixSig: observed mixture (sigLen x nCh)
+%           nSrc: number of sources in the mixture (scalar)
+%       sampFreq: sampling frequency [Hz] of mixSig (scalar)
+%         nBases: number of bases for each source in NMF model (scalar, default: 4)
+%        fftSize: window length [points] in STFT (scalar, default: next higher power of 2 that exceeds 0.256*sampFreq)
+%      shiftSize: shift length [points] in STFT (scalar, default: fftSize/2)
+%     windowType: window function used in STFT (name of window function, default: 'hamming')
+%          nIter: number of iterations in the parameter update in ILRMA (scalar, default: 100)
+%         refMic: reference microphone for applying back projection (default: 1)
+% applyWhitening: apply whitening to the observed multichannel spectrograms or not (true or false, default: false)
+%       drawConv: plot cost function values in each iteration or not (true or false, default: false)
 %
 % [outputs]
-%          Y: estimated multisource signals in time-frequency domain (frequency bin x time frame x source)
-%       cost: values of cost function in each iteration (It+1 x 1)
-%          W: demixing matrices (source x channel x frequency bin)
+%         estSig: estimated signals (sigLen x nCh x nSrc)
+%           cost: convergence behavior of cost function in ILRMA (nIter+1 x 1)
 %
 
-% Check errors and set default values
-[I,J,M] = size(X);
-N = M;
-if (N > I)
-    error('The input spectrogram might be wrong. The size of it must be (freq x frame x ch).\n');
+% Arguments check and set default values
+arguments
+    mixSig (:,:) double
+    nSrc (1,1) double {mustBeInteger(nSrc)}
+    sampFreq (1,1) double
+    nBases (1,1) double {mustBeInteger(nBases)} = 4
+    fftSize (1,1) double {mustBeInteger(fftSize)} = 2^nextpow2(0.256*sampFreq)
+    shiftSize (1,1) double {mustBeInteger(shiftSize)} = fftSize/2
+    windowType char {mustBeMember(windowType,{'hamming','hann','rectangular','blackman','sine'})} = 'hamming'
+    nIter (1,1) double {mustBeInteger(nIter)} = 100
+    refMic (1,1) double {mustBeInteger(refMic)} = 1
+    applyWhitening (1,1) logical = false
+    drawConv (1,1) logical = false
 end
-if (nargin < 9)
-    drawConv = false;
+
+% Error check
+[sigLen, nCh] = size(mixSig); % sigLen: signal length, nCh: number of channels
+if sigLen < nCh; error("The size of mixSig might be wrong.\n"); end
+if nCh < nSrc || nSrc < 2; error("The number of channels must be equal to or grater than the number of sources in the mixture.\n"); end
+if sampFreq <= 0; error("The sampling frequency (sampFreq) must be a positive value.\n"); end
+if nBases < 1; error("The number of bases (nBases) must be a positive integer value.\n"); end
+if fftSize < 1; error("The FFT length in STFT (fftSize) must be a positive integer value.\n"); end
+if shiftSize < 1; error("The shift length in STFT (shiftSize) must be a positive integer value.\n"); end
+if nIter < 1; error("The number of iterations (nIter) must be a positive integer value.\n"); end
+if refMic < 1 || refMic > nCh; error("The reference microphone must be an integer between 1 and nCh.\n"); end
+
+% Apply multichannel short-time Fourier transform (STFT)
+[mixSpecgram, windowInStft] = STFT(mixSig, fftSize, shiftSize, windowType);
+
+% Apply whitening (decorrelate X so that the correlation matrix becomes an identity matrix) based on principal component analysis
+if applyWhitening
+    inputMixSpecgram = whitening(mixSpecgram, nSrc); % apply whitening, where dimension is reduced from nCh to nSrc when nSrc < nCh
+else
+    inputMixSpecgram = mixSpecgram(:,:,1:nSrc); % when nSrc < nCh, only mixSpecgram(:,:,1:nSrc) is input to ILRMA so that the number of microphones equals to the number of sources (determined condition)
 end
-if (nargin < 10)
-    W = zeros(N,M,I);
-    for i=1:I
-        W(:,:,i) = eye(N); % initial demixing matrices (identity matrices)
-    end
+
+% Apply ILRMA
+[estSpecgram, cost] = local_consistentILRMA(inputMixSpecgram, nIter, nBases, fftSize, shiftSize, windowInStft, sigLen, drawConv, mixSpecgram(:,:,refMic));
+
+% Apply back projection (fix the scale ambiguity using the reference microphone channel)
+scaleFixedSepSpecgram = backProjection(estSpecgram, mixSpecgram(:,:,refMic)); % scale-fixed estimated signal
+
+% Inverse STFT for each source
+estSig = ISTFT(scaleFixedSepSpecgram, shiftSize, windowInStft, sigLen);
 end
-if (nargin < 11)
-    T = max( rand( I, nb, N ), eps ); % initial basis matrix in ILRMA1
-end
-if (nargin < 12)
-    V = max( rand( nb, J, N ), eps ); % initial activation matrix in ILRMA1
-end
-if size(W,1) ~= N || size(W,2) ~= M || size(W,3) ~= I
-    error('The size of input initial W is incorrect.\n');
-end
-if (size(T,1) ~= I || size(T,2) ~= nb || size(V,1) ~= nb || size(V,2) ~= J)
-    error('The sizes of input initial T and V are incorrect.\n');
-end
+
+%% Local function for consistent ILRMA
+function [Y, cost] = local_consistentILRMA(X, nIter, L, fftSize, shiftSize, analyWindow, sigLen, drawConv, refMixSpecgram)
+% [inputs]
+%              X: observed multichannel spectrograms (I x J x M)
+%          nIter: number of iterations of the parameter updates
+%              L: number of bases in NMF model for each source
+%        fftSize: window length [points] in STFT (scalar)
+%      shiftSize: shift length [points] in STFT (scalar)
+%    analyWindow: window function used in STFT (fftSize x 1)
+%         sigLen: length of original signal (scalar)
+%       drawConv: plot cost function values in each iteration or not (true or false)
+% refMixSpecgram: observed reference spectrograms before apply whitening (I x J)
+%
+% [outputs]
+%              Y: estimated spectrograms of sources (I x J x N)
+%           cost: convergence behavior of cost function in ILRMA (nIter+1 x 1)
+%
+% [scalars]
+%              I: number of frequency bins, 
+%              J: number of time frames
+%              M: number of channels (microphones)
+%              N: number of sources (equals to M)
+%              L: number of bases in NMF model for each source
+%
+% [matrices]
+%              X: observed multichannel spectrograms (I x J x M)
+%             pX: permuted observed multichannel spectrograms (M x J x I)
+%              W: frequency-wise demixing matrix (N x M x I)
+%              Y: estimated multisource spectrograms (I x J x N)
+%              P: estimated multisource power spectrograms (I x J x N)
+%              T: sourcewise basis matrix in NMF (I x L x N)
+%              V: sourcewise activation matrix in NMF (L x J x N)
+%              R: sourcewise low-rank model spectrogram constructed by T and V (I x J x N)
+%              E: identity matrix (N x N)
+%              U: model-spectrogram-weighted sample covariance matrix of the mixture (M x M)
+%
 
 % Initialization
-R = zeros(I,J,N);
-Y = zeros(I,J,N);
-for i=1:I
-    Y(i,:,:) = (W(:,:,i)*squeeze(X(i,:,:)).').'; % initial estimated signals
+[I,J,M] = size(X); % I:frequency bins, J: time frames, M: channels
+pX = permute(X, [3,2,1]); % permuted X whose dimensions are M x J x I
+N = M; % N: number of sources, which equals to M in ILRMA
+W = zeros(N,M,I); % frequency-wise demixing matrix
+Y = zeros(I,J,N); % estimated spectrograms of sources (Y(i,:,n) =  W(n,:,i)*pX(:,:,i))
+for i = 1:I
+    W(:,:,i) = eye(N); % initial demixing matrices are set to identity matrices
+    Y(i,:,:) = (W(:,:,i)*pX(:,:,i)).'; % initial estimated spectrograms
 end
-P = max(abs(Y).^2,eps);
-UNJI = ones(N,J,I);
-Xp = permute(X,[3,2,1]); % M x J x I
-cost = zeros(It+1,1);
+P = max(abs(Y).^2, eps); % power spectrogram of Y
+T = max(rand( I, L, N ), eps); % sourcewise basis matrix in NMF
+V = max(rand( L, J, N ), eps); % sourcewise activation matrix in NMF
+R = zeros(I,J,N); % sourcewise low-rank model spectrogram constructed by T and V (R(:,:,n) = T(:,:,n)*V(:,:,n))
+for n = 1:N
+    R(:,:,n) = T(:,:,n)*V(:,:,n); % initial source model defined by T and V
+end
+E = eye(N); % identity matrix for e_n
+cost = zeros(nIter+1, 1);
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%% Consisten ILRMA %%%%%%%%%%%%%%%%%%%%%%%%%%%
-for n=1:N
-    R(:,:,n) = T(:,:,n)*V(:,:,n); % low-rank source model
-end
+% Calculate initial cost function value
 if drawConv
-    cost(1,1) = local_costFunction( P, R, W, I, J );
+    cost(1,1) = local_calcCostFunction( P, R, W, I, J );
 end
-% Iterative update
+
+% Optimize parameters in ILRMA (W, T, and V)
 fprintf('Iteration:    ');
-for it=1:It
-    fprintf('\b\b\b\b%4d', it);
-    for n=1:N
-        %%%%% Update T %%%%%
-        T(:,:,n) = T(:,:,n) .* sqrt( (P(:,:,n).*(R(:,:,n).^(-2)))*V(:,:,n).' ./ ( (R(:,:,n).^(-1))*V(:,:,n).' ) );
-        T(:,:,n) = max(T(:,:,n),eps);
+for iIter = 1:nIter
+    fprintf('\b\b\b\b%4d', iIter);
+    
+    %%%%% Update parameters %%%%%
+    for n = 1:N
+        %%%%% Update rule of T %%%%%
+        T(:,:,n) = T(:,:,n) .* sqrt((P(:,:,n)./(R(:,:,n).^2))*V(:,:,n).' ./ ( (1./R(:,:,n))*V(:,:,n).' ));
+        T(:,:,n) = max(T(:,:,n), eps);
         R(:,:,n) = T(:,:,n)*V(:,:,n);
-        %%%%% Update V %%%%%
-        V(:,:,n) = V(:,:,n) .* sqrt( T(:,:,n).'*(P(:,:,n).*(R(:,:,n).^(-2))) ./ ( T(:,:,n).'*(R(:,:,n).^(-1)) ) );
-        V(:,:,n) = max(V(:,:,n),eps);
+        %%%%% Update rule of V %%%%%
+        V(:,:,n) = V(:,:,n) .* sqrt(T(:,:,n).'*(P(:,:,n)./(R(:,:,n).^2)) ./ ( T(:,:,n).'*(1./R(:,:,n)) ));
+        V(:,:,n) = max(V(:,:,n), eps);
         R(:,:,n) = T(:,:,n)*V(:,:,n);
-        %%%%% Update W %%%%%
-        Rp = permute(R,[4,2,1,3]); % 1 x J x I x N
-        eleinvRp = bsxfun(@rdivide,UNJI,Rp(:,:,:,n)); % N x J x I
-        XpHt = conj( permute( Xp, [2,1,3] ) ); % J x M x I (matrix-wise Hermitian transpose)
-        D = local_multiplication( Xp.*eleinvRp, XpHt )/J; % M x M x I
-        WD = local_multiplicationSquare( W, D, I, M ); % M x M x I
-        invWDE = local_inverse( WD, I, M, n ); % M x I
-        w = local_wNormalize( invWDE, D, I, M ); % I x M
-        W(n,:,:) = w';
-        for i=1:I
-            Y(i,:,n) = W(n,:,i)*Xp(:,:,i);
+        %%%%% Update rule of W %%%%%
+        for i = 1:I
+            U = (1/J)*(pX(:,:,i).*(1./R(i,:,n)))*pX(:,:,i)'; % U: M x M matrix (use implicit expansion)
+            w = (W(:,:,i)*U)\E(:,n); % w: M x 1 vector
+            w = w/sqrt(w'*U*w); % w: M x 1 vector
+            W(n,:,i) = w'; % w': 1 x M vector
         end
     end
-    P = max(abs(Y).^2,eps);
-    if drawConv
-        cost(it+1,1) = local_costFunction( P, R, W, I, J );
+    for i = 1:I
+        Y(i,:,:) = (W(:,:,i)*pX(:,:,i)).'; % temporal estimated spectrograms of sources
     end
     
-    % Apply projection back
-    lambda = local_projectionBack(Y,X(:,:,refMic)); % N x 1 x I
-    W = bsxfun(@times,W,lambda);
-    lambdaPow = abs(lambda).^2; % N x 1 x I
-    lambdaIJ = permute(lambdaPow,[3,2,1]); % I x 1 x N
-    R = bsxfun(@times,R,lambdaIJ);
-    lambdaIL = permute(lambdaPow,[3,2,1]); % I x 1 x N
-    T = bsxfun(@times,T,lambdaIL);
+    %%%%% Back projection %%%%%
+    lambda = local_backProjection(Y, refMixSpecgram, I, N); % N x 1 x I
+    W = W.*lambda; % N x M x I (use implicit expansion)
+    Y = Y.*permute(lambda, [3,2,1]); % I x J x N (use implicit expansion)
+    lambdaPow = permute(abs(lambda).^2, [3,2,1]); % I x 1 x N
+    R = R.*lambdaPow; % I x J x N (use implicit expansion)
+    T = T.*lambdaPow; % I x L x N (use implicit expansion)
     
-    % Recompute Y after applying projection back
-    for i=1:I
-        Y(i,:,:) = (W(:,:,i)*squeeze(X(i,:,:)).').';
-    end
-    
-    % Apply ISTFT and STFT for ensuring spectrogram consistency
-    Y = STFT( ISTFT(Y, shiftSize, window, mixLen), fftSize, shiftSize, window );
+    %%%%% Ensure spectrogram consistency %%%%%
+    Y = STFT(ISTFT(Y, shiftSize, analyWindow, sigLen), fftSize, shiftSize, analyWindow); % inverse STFT and STFT
     P = max(abs(Y).^2,eps); % recompute power spectrogram
+    
+    %%%%% Calculate cost function value %%%%%
+    if drawConv
+        cost(iIter+1,1) = local_calcCostFunction( P, R, W, I, J );
+    end
 end
-fprintf(' Consisten ILRMA done.\n');
 
+% Draw convergence behavior
 if drawConv
-    figure;
-    plot( (0:it), cost );
-    set(gca,'FontName','Times','FontSize',16);
-    xlabel('Iteration','FontName','Arial','FontSize',16);
-    ylabel('Value of cost function','FontName','Arial','FontSize',16);
+    figure; plot((0:nIter), cost);
+    set(gca, 'FontName', 'Times', 'FontSize', 16);
+    xlabel('Number of iterations', 'FontName', 'Arial', 'FontSize', 16);
+    ylabel('Value of cost function', 'FontName', 'Arial', 'FontSize', 16);
 end
-end
-
-%% Local functions
-%%% Cost function %%%
-function [ cost ] = local_costFunction( P, R, W, I, J )
-A = zeros(I,1);
-for i=1:I
-    x = abs(det(W(:,:,i)));
-    if x < eps
-        x = eps;
-    end
-    A(i) = log(x);
-end
-cost = sum(sum(sum(P./R+log(R),3),2),1) - 2*J*sum(A);
+fprintf(' Consistent ILRMA done.\n');
 end
 
-%%% Multiplication %%%
-function [ XY ] = local_multiplication( X, Y )
-[A,~,I] = size(X);
-[~,B,I] = size(Y);
-XY = zeros( A, B, I );
+%% Local function for calculating cost function value in ILRMA
+function [ cost ] = local_calcCostFunction(P, R, W, I, J)
+logDetAbsW = zeros(I,1);
 for i = 1:I
-    XY(:,:,i) = X(:,:,i)*Y(:,:,i);
+    logDetAbsW(i,1) = log(max(abs(det(W(:,:,i))), eps));
 end
-end
-
-%%% Multiplication of square matrices %%%
-function [ XY ] = local_multiplicationSquare( X, Y, I, M )
-if M == 2
-    XY = zeros( M, M, I );
-    XY(1,1,:) = X(1,1,:).*Y(1,1,:) + X(1,2,:).*Y(2,1,:);
-    XY(1,2,:) = X(1,1,:).*Y(1,2,:) + X(1,2,:).*Y(2,2,:);
-    XY(2,1,:) = X(2,1,:).*Y(1,1,:) + X(2,2,:).*Y(2,1,:);
-    XY(2,2,:) = X(2,1,:).*Y(1,2,:) + X(2,2,:).*Y(2,2,:);
-elseif M == 3
-    XY = zeros( M, M, I );
-    XY(1,1,:) = X(1,1,:).*Y(1,1,:) + X(1,2,:).*Y(2,1,:) + X(1,3,:).*Y(3,1,:);
-    XY(1,2,:) = X(1,1,:).*Y(1,2,:) + X(1,2,:).*Y(2,2,:) + X(1,3,:).*Y(3,2,:);
-    XY(1,3,:) = X(1,1,:).*Y(1,3,:) + X(1,2,:).*Y(2,3,:) + X(1,3,:).*Y(3,3,:);
-    XY(2,1,:) = X(2,1,:).*Y(1,1,:) + X(2,2,:).*Y(2,1,:) + X(2,3,:).*Y(3,1,:);
-    XY(2,2,:) = X(2,1,:).*Y(1,2,:) + X(2,2,:).*Y(2,2,:) + X(2,3,:).*Y(3,2,:);
-    XY(2,3,:) = X(2,1,:).*Y(1,3,:) + X(2,2,:).*Y(2,3,:) + X(2,3,:).*Y(3,3,:);
-    XY(3,1,:) = X(3,1,:).*Y(1,1,:) + X(3,2,:).*Y(2,1,:) + X(3,3,:).*Y(3,1,:);
-    XY(3,2,:) = X(3,1,:).*Y(1,2,:) + X(3,2,:).*Y(2,2,:) + X(3,3,:).*Y(3,2,:);
-    XY(3,3,:) = X(3,1,:).*Y(1,3,:) + X(3,2,:).*Y(2,3,:) + X(3,3,:).*Y(3,3,:);
-elseif M == 4
-    XY = zeros( M, M, I );
-    XY(1,1,:) = X(1,1,:).*Y(1,1,:) + X(1,2,:).*Y(2,1,:) + X(1,3,:).*Y(3,1,:) + X(1,4,:).*Y(4,1,:);
-    XY(1,2,:) = X(1,1,:).*Y(1,2,:) + X(1,2,:).*Y(2,2,:) + X(1,3,:).*Y(3,2,:) + X(1,4,:).*Y(4,2,:);
-    XY(1,3,:) = X(1,1,:).*Y(1,3,:) + X(1,2,:).*Y(2,3,:) + X(1,3,:).*Y(3,3,:) + X(1,4,:).*Y(4,3,:);
-    XY(1,4,:) = X(1,1,:).*Y(1,4,:) + X(1,2,:).*Y(2,4,:) + X(1,3,:).*Y(3,4,:) + X(1,4,:).*Y(4,4,:);
-    XY(2,1,:) = X(2,1,:).*Y(1,1,:) + X(2,2,:).*Y(2,1,:) + X(2,3,:).*Y(3,1,:) + X(2,4,:).*Y(4,1,:);
-    XY(2,2,:) = X(2,1,:).*Y(1,2,:) + X(2,2,:).*Y(2,2,:) + X(2,3,:).*Y(3,2,:) + X(2,4,:).*Y(4,2,:);
-    XY(2,3,:) = X(2,1,:).*Y(1,3,:) + X(2,2,:).*Y(2,3,:) + X(2,3,:).*Y(3,3,:) + X(2,4,:).*Y(4,3,:);
-    XY(2,4,:) = X(2,1,:).*Y(1,4,:) + X(2,2,:).*Y(2,4,:) + X(2,3,:).*Y(3,4,:) + X(2,4,:).*Y(4,4,:);
-    XY(3,1,:) = X(3,1,:).*Y(1,1,:) + X(3,2,:).*Y(2,1,:) + X(3,3,:).*Y(3,1,:) + X(3,4,:).*Y(4,1,:);
-    XY(3,2,:) = X(3,1,:).*Y(1,2,:) + X(3,2,:).*Y(2,2,:) + X(3,3,:).*Y(3,2,:) + X(3,4,:).*Y(4,2,:);
-    XY(3,3,:) = X(3,1,:).*Y(1,3,:) + X(3,2,:).*Y(2,3,:) + X(3,3,:).*Y(3,3,:) + X(3,4,:).*Y(4,3,:);
-    XY(3,4,:) = X(3,1,:).*Y(1,4,:) + X(3,2,:).*Y(2,4,:) + X(3,3,:).*Y(3,4,:) + X(3,4,:).*Y(4,4,:);
-    XY(4,1,:) = X(4,1,:).*Y(1,1,:) + X(4,2,:).*Y(2,1,:) + X(4,3,:).*Y(3,1,:) + X(4,4,:).*Y(4,1,:);
-    XY(4,2,:) = X(4,1,:).*Y(1,2,:) + X(4,2,:).*Y(2,2,:) + X(4,3,:).*Y(3,2,:) + X(4,4,:).*Y(4,2,:);
-    XY(4,3,:) = X(4,1,:).*Y(1,3,:) + X(4,2,:).*Y(2,3,:) + X(4,3,:).*Y(3,3,:) + X(4,4,:).*Y(4,3,:);
-    XY(4,4,:) = X(4,1,:).*Y(1,4,:) + X(4,2,:).*Y(2,4,:) + X(4,3,:).*Y(3,4,:) + X(4,4,:).*Y(4,4,:);
-else % slow
-    XY = zeros( M, M, I );
-    for i = 1:I
-        XY(:,:,i) = X(:,:,i)*Y(:,:,i);
-    end
-end
+cost = sum(sum(sum(P./R+log(R),3),2),1) - 2*J*sum(logDetAbsW, 1);
 end
 
-%%% Inverse %%%
-function [ invXE ] = local_inverse( X, I, M, n )
-if M == 2
-    invX = zeros(M,M,I);
-    detX = max(X(1,1,:).*X(2,2,:) - X(1,2,:).*X(2,1,:), eps);
-    invX(1,1,:) = X(2,2,:);
-    invX(1,2,:) = -1*X(1,2,:);
-    invX(2,1,:) = -1*X(2,1,:);
-    invX(2,2,:) = X(1,1,:);
-    invX = bsxfun(@rdivide, invX, detX); % This can be rewritten as "invX = invX./detX;" using implicit expansion for later R2016b
-    invXE = squeeze(invX(:,n,:)); % multiplying one-hot vector e from right side of invX
-elseif M == 3
-    invX = zeros(M,M,I);
-    detX = max(X(1,1,:).*X(2,2,:).*X(3,3,:) + X(2,1,:).*X(3,2,:).*X(1,3,:) + X(3,1,:).*X(1,2,:).*X(2,3,:) - X(1,1,:).*X(3,2,:).*X(2,3,:) - X(3,1,:).*X(2,2,:).*X(1,3,:) - X(2,1,:).*X(1,2,:).*X(3,3,:), eps);
-    invX(1,1,:) = X(2,2,:).*X(3,3,:) - X(2,3,:).*X(3,2,:);
-    invX(1,2,:) = X(1,3,:).*X(3,2,:) - X(1,2,:).*X(3,3,:);
-    invX(1,3,:) = X(1,2,:).*X(2,3,:) - X(1,3,:).*X(2,2,:);
-    invX(2,1,:) = X(2,3,:).*X(3,1,:) - X(2,1,:).*X(3,3,:);
-    invX(2,2,:) = X(1,1,:).*X(3,3,:) - X(1,3,:).*X(3,1,:);
-    invX(2,3,:) = X(1,3,:).*X(2,1,:) - X(1,1,:).*X(2,3,:);
-    invX(3,1,:) = X(2,1,:).*X(3,2,:) - X(2,2,:).*X(3,1,:);
-    invX(3,2,:) = X(1,2,:).*X(3,1,:) - X(1,1,:).*X(3,2,:);
-    invX(3,3,:) = X(1,1,:).*X(2,2,:) - X(1,2,:).*X(2,1,:);
-    invX = bsxfun(@rdivide, invX, detX); % This can be rewritten as "invX = invX./detX;" using implicit expansion for later R2016b
-    invXE = squeeze(invX(:,n,:)); % multiplying one-hot vector e from right side of invX
-elseif M == 4
-    invX = zeros(M,M,I);
-    detX = max(X(1,1,:).*X(2,2,:).*X(3,3,:).*X(4,4,:) + X(1,1,:).*X(2,3,:).*X(3,4,:).*X(4,2,:) + X(1,1,:).*X(2,4,:).*X(3,2,:).*X(4,3,:) + X(1,2,:).*X(2,1,:).*X(3,4,:).*X(4,3,:) + X(1,2,:).*X(2,3,:).*X(3,1,:).*X(4,4,:) + X(1,2,:).*X(2,4,:).*X(3,3,:).*X(4,1,:) + X(1,3,:).*X(2,1,:).*X(3,2,:).*X(4,4,:) + X(1,3,:).*X(2,2,:).*X(3,4,:).*X(4,1,:) + X(1,3,:).*X(2,4,:).*X(3,1,:).*X(4,2,:) + X(1,4,:).*X(2,1,:).*X(3,3,:).*X(4,2,:) + X(1,4,:).*X(2,2,:).*X(3,1,:).*X(4,3,:) + X(1,4,:).*X(2,3,:).*X(3,2,:).*X(4,1,:) - X(1,1,:).*X(2,2,:).*X(3,4,:).*X(4,3,:) - X(1,1,:).*X(2,3,:).*X(3,2,:).*X(4,4,:) - X(1,1,:).*X(2,4,:).*X(3,3,:).*X(4,2,:) - X(1,2,:).*X(2,1,:).*X(3,3,:).*X(4,4,:) - X(1,2,:).*X(2,3,:).*X(3,4,:).*X(4,1,:) - X(1,2,:).*X(2,4,:).*X(3,1,:).*X(4,3,:) - X(1,3,:).*X(2,1,:).*X(3,4,:).*X(4,2,:) - X(1,3,:).*X(2,2,:).*X(3,1,:).*X(4,4,:) - X(1,3,:).*X(2,4,:).*X(3,2,:).*X(4,1,:) - X(1,4,:).*X(2,1,:).*X(3,2,:).*X(4,3,:) - X(1,4,:).*X(2,2,:).*X(3,3,:).*X(4,1,:) - X(1,4,:).*X(2,3,:).*X(3,1,:).*X(4,2,:), eps);
-    invX(1,1,:) = X(2,2,:).*X(3,3,:).*X(4,4,:) + X(2,3,:).*X(3,4,:).*X(4,2,:) + X(2,4,:).*X(3,2,:).*X(4,3,:) - X(2,2,:).*X(3,4,:).*X(4,3,:) - X(2,3,:).*X(3,2,:).*X(4,4,:) - X(2,4,:).*X(3,3,:).*X(4,2,:);
-    invX(1,2,:) = X(1,2,:).*X(3,4,:).*X(4,3,:) + X(1,3,:).*X(3,2,:).*X(4,4,:) + X(1,4,:).*X(3,3,:).*X(4,2,:) - X(1,2,:).*X(3,3,:).*X(4,4,:) - X(1,3,:).*X(3,4,:).*X(4,2,:) - X(1,4,:).*X(3,2,:).*X(4,3,:);
-    invX(1,3,:) = X(1,2,:).*X(2,3,:).*X(4,4,:) + X(1,3,:).*X(2,4,:).*X(4,2,:) + X(1,4,:).*X(2,2,:).*X(4,3,:) - X(1,2,:).*X(2,4,:).*X(4,3,:) - X(1,3,:).*X(2,2,:).*X(4,4,:) - X(1,4,:).*X(2,3,:).*X(4,2,:);
-    invX(1,4,:) = X(1,2,:).*X(2,4,:).*X(3,3,:) + X(1,3,:).*X(2,2,:).*X(3,4,:) + X(1,4,:).*X(2,3,:).*X(3,2,:) - X(1,2,:).*X(2,3,:).*X(3,4,:) - X(1,3,:).*X(2,4,:).*X(3,2,:) - X(1,4,:).*X(2,2,:).*X(3,3,:);
-    invX(2,1,:) = X(2,1,:).*X(3,4,:).*X(4,3,:) + X(2,3,:).*X(3,1,:).*X(4,4,:) + X(2,4,:).*X(3,3,:).*X(4,1,:) - X(2,1,:).*X(3,3,:).*X(4,4,:) - X(2,3,:).*X(3,4,:).*X(4,1,:) - X(2,4,:).*X(3,1,:).*X(4,3,:);
-    invX(2,2,:) = X(1,1,:).*X(3,3,:).*X(4,4,:) + X(1,3,:).*X(3,4,:).*X(4,1,:) + X(1,4,:).*X(3,1,:).*X(4,3,:) - X(1,1,:).*X(3,4,:).*X(4,3,:) - X(1,3,:).*X(3,1,:).*X(4,4,:) - X(1,4,:).*X(3,3,:).*X(4,1,:);
-    invX(2,3,:) = X(1,1,:).*X(2,4,:).*X(4,3,:) + X(1,3,:).*X(2,1,:).*X(4,4,:) + X(1,4,:).*X(2,3,:).*X(4,1,:) - X(1,1,:).*X(2,3,:).*X(4,4,:) - X(1,3,:).*X(2,4,:).*X(4,1,:) - X(1,4,:).*X(2,1,:).*X(4,3,:);
-    invX(2,4,:) = X(1,1,:).*X(2,3,:).*X(3,4,:) + X(1,3,:).*X(2,4,:).*X(3,1,:) + X(1,4,:).*X(2,1,:).*X(3,3,:) - X(1,1,:).*X(2,4,:).*X(3,3,:) - X(1,3,:).*X(2,1,:).*X(3,4,:) - X(1,4,:).*X(2,3,:).*X(3,1,:);
-    invX(3,1,:) = X(2,1,:).*X(3,2,:).*X(4,4,:) + X(2,2,:).*X(3,4,:).*X(4,1,:) + X(2,4,:).*X(3,1,:).*X(4,2,:) - X(2,1,:).*X(3,4,:).*X(4,2,:) - X(2,2,:).*X(3,1,:).*X(4,4,:) - X(2,4,:).*X(3,2,:).*X(4,1,:);
-    invX(3,2,:) = X(1,1,:).*X(3,4,:).*X(4,2,:) + X(1,2,:).*X(3,1,:).*X(4,4,:) + X(1,4,:).*X(3,2,:).*X(4,1,:) - X(1,1,:).*X(3,2,:).*X(4,4,:) - X(1,2,:).*X(3,4,:).*X(4,1,:) - X(1,4,:).*X(3,1,:).*X(4,2,:);
-    invX(3,3,:) = X(1,1,:).*X(2,2,:).*X(4,4,:) + X(1,2,:).*X(2,4,:).*X(4,1,:) + X(1,4,:).*X(2,1,:).*X(4,2,:) - X(1,1,:).*X(2,4,:).*X(4,2,:) - X(1,2,:).*X(2,1,:).*X(4,4,:) - X(1,4,:).*X(2,2,:).*X(4,1,:);
-    invX(3,4,:) = X(1,1,:).*X(2,4,:).*X(3,2,:) + X(1,2,:).*X(2,1,:).*X(3,4,:) + X(1,4,:).*X(2,2,:).*X(3,1,:) - X(1,1,:).*X(2,2,:).*X(3,4,:) - X(1,2,:).*X(2,4,:).*X(3,1,:) - X(1,4,:).*X(2,1,:).*X(3,2,:);
-    invX(4,1,:) = X(2,1,:).*X(3,3,:).*X(4,2,:) + X(2,2,:).*X(3,1,:).*X(4,3,:) + X(2,3,:).*X(3,2,:).*X(4,1,:) - X(2,1,:).*X(3,2,:).*X(4,3,:) - X(2,2,:).*X(3,3,:).*X(4,1,:) - X(2,3,:).*X(3,1,:).*X(4,2,:);
-    invX(4,2,:) = X(1,1,:).*X(3,2,:).*X(4,3,:) + X(1,2,:).*X(3,3,:).*X(4,1,:) + X(1,3,:).*X(3,1,:).*X(4,2,:) - X(1,1,:).*X(3,3,:).*X(4,2,:) - X(1,2,:).*X(3,1,:).*X(4,3,:) - X(1,3,:).*X(3,2,:).*X(4,1,:);
-    invX(4,3,:) = X(1,1,:).*X(2,3,:).*X(4,2,:) + X(1,2,:).*X(2,1,:).*X(4,3,:) + X(1,3,:).*X(2,2,:).*X(4,1,:) - X(1,1,:).*X(2,2,:).*X(4,3,:) - X(1,2,:).*X(2,3,:).*X(4,1,:) - X(1,3,:).*X(2,1,:).*X(4,2,:);
-    invX(4,4,:) = X(1,1,:).*X(2,2,:).*X(3,3,:) + X(1,2,:).*X(2,3,:).*X(3,1,:) + X(1,3,:).*X(2,1,:).*X(3,2,:) - X(1,1,:).*X(2,3,:).*X(3,2,:) - X(1,2,:).*X(2,1,:).*X(3,3,:) - X(1,3,:).*X(2,2,:).*X(3,1,:);
-    invX = bsxfun(@rdivide, invX, detX); % This can be rewritten as "invX = invX./detX;" using implicit expansion for later R2016b
-    invXE = squeeze(invX(:,n,:)); % multiplying one-hot vector e from right side of invX
-else % slow
-    eyeM = eye(M);
-    row = repmat(reshape(1:M*I,[M,1,I]),[1 M 1]);
-    col = repmat(reshape(1:M*I,[1,M,I]),[M 1 1]);
-    invX = reshape((sparse(row(:),col(:),X(:))\repmat(eyeM,[I,1])).', [M, M, I]);
-    invX = full(permute(invX,[2,1,3]));
-    invXE = squeeze(invX(:,n,:)); % multiplying one-hot vector e from right side of invX
+%% Local function for applying back projection and returns frequency-wise coefficients
+function [ D ] = local_backProjection(Y, X, I, N)
+D = zeros(I,N);
+for i = 1:I
+    Yi = squeeze(Y(i,:,:)).'; % N x J
+    D(i,:) = X(i,:,1)*Yi'/(Yi*Yi'); % 1 x N
 end
-end
-
-%%% Normalization of separation filter w %%%
-function [ w ] = local_wNormalize( w, D, I, M )
-if M == 2
-    D = permute(D,[3,1,2]); % I x N x N
-    wHt = w'; % I x N
-    w = w.'; % I x N
-    wHtD(:,1) = wHt(:,1).*D(:,1,1) + wHt(:,2).*D(:,2,1);
-    wHtD(:,2) = wHt(:,1).*D(:,1,2) + wHt(:,2).*D(:,2,2);
-    normCoef = sqrt( wHtD(:,1).*w(:,1) + wHtD(:,2).*w(:,2) );
-    w = bsxfun(@rdivide,w,max(normCoef,eps));
-elseif M == 3
-    D = permute(D,[3,1,2]); % I x N x N
-    wHt = w'; % I x N
-    w = w.'; % I x N
-    wHtD(:,1) = wHt(:,1).*D(:,1,1) + wHt(:,2).*D(:,2,1) + wHt(:,3).*D(:,3,1);
-    wHtD(:,2) = wHt(:,1).*D(:,1,2) + wHt(:,2).*D(:,2,2) + wHt(:,3).*D(:,3,2);
-    wHtD(:,3) = wHt(:,1).*D(:,1,3) + wHt(:,2).*D(:,2,3) + wHt(:,3).*D(:,3,3);
-    normCoef = sqrt( wHtD(:,1).*w(:,1) + wHtD(:,2).*w(:,2) + wHtD(:,3).*w(:,3) );
-    w = bsxfun(@rdivide,w,max(normCoef,eps));
-elseif M == 4
-    D = permute(D,[3,1,2]); % I x N x N
-    wHt = w'; % I x N
-    w = w.'; % I x N
-    wHtD(:,1) = wHt(:,1).*D(:,1,1) + wHt(:,2).*D(:,2,1) + wHt(:,3).*D(:,3,1) + wHt(:,4).*D(:,4,1);
-    wHtD(:,2) = wHt(:,1).*D(:,1,2) + wHt(:,2).*D(:,2,2) + wHt(:,3).*D(:,3,2) + wHt(:,4).*D(:,4,2);
-    wHtD(:,3) = wHt(:,1).*D(:,1,3) + wHt(:,2).*D(:,2,3) + wHt(:,3).*D(:,3,3) + wHt(:,4).*D(:,4,3);
-    wHtD(:,4) = wHt(:,1).*D(:,1,4) + wHt(:,2).*D(:,2,4) + wHt(:,3).*D(:,3,4) + wHt(:,4).*D(:,4,4);
-    normCoef = sqrt( wHtD(:,1).*w(:,1) + wHtD(:,2).*w(:,2) + wHtD(:,3).*w(:,3) + wHtD(:,4).*w(:,4) );
-    w = bsxfun(@rdivide,w,max(normCoef,eps));
-else
-    wHt = w'; % I x N
-    normCoef = zeros(1,I);
-    for i = 1:I
-        normCoef(1,i) = wHt(i,:)*D(:,:,i)*w(:,i);
-    end
-    w = bsxfun(@rdivide,w,max(sqrt(normCoef),eps)).';
-end
-end
-
-%%% Projection back that returns only frequency-wise coefficients %%%
-function [ D ] = local_projectionBack( Y, X )
-[I,~,N] = size(Y);
-A = zeros(1,N,I);
-D = zeros(N,1,I);
-for i=1:I
-    Yi = squeeze(Y(i,:,:)).'; % channels x frames (N x J)
-    A(1,:,i) = X(i,:,1)*Yi'/(Yi*Yi');
-end
-A(isnan(A)) = 0;
-A(isinf(A)) = 0;
-for n=1:N
-    for i=1:I
-        D(n,1,i)=A(1,n,i);
-    end
-end
+D(isnan(D) | isinf(D)) = 0; % replace NaN and Inf to 0
+D = permute(D, [2,3,1]); % N x 1 x I
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% EOF %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
