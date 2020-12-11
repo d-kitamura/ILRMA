@@ -6,8 +6,8 @@ Sample MATLAB script for independent low-rank matrix analysis (ILRMA) and its ap
 ## Contents
 - input [dir]:		        includes test audio signals (reverberation time is around 300 ms)
 - reference [dir]:	        includes reference documents for ILRMA
-- consistentIlrma.m:        blind source separation based on consistent ILRMA
-- ilrma.m:			        blind source separation based on consistent ILRMA
+- consistentILRMA.m:        blind source separation based on consistent ILRMA
+- ILRMA.m:			        blind source separation based on ILRMA
 - ISTFT.m:			        inverse short-time Fourier transform
 - main.m:			        main script with parameter settings
 - backProjection.m:	        back projection technique (fixing frequency-wise scales)
