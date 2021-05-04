@@ -1,4 +1,4 @@
-function [specgram,analyWin,sigLen] = STFT(sig,fftSize,shiftSize,winType)
+function [specgram,analyWin,sigLen] = STFT(sig,fftSize,shiftSize,analyWin)
 %
 % Short-time Fourier transform
 %
@@ -8,16 +8,14 @@ function [specgram,analyWin,sigLen] = STFT(sig,fftSize,shiftSize,winType)
 % http://d-kitamura.net
 %
 % [syntax]
-%   [specgram,analyWin,sigLen] = STFT(sig)
-%   [specgram,analyWin,sigLen] = STFT(sig,fftSize)
 %   [specgram,analyWin,sigLen] = STFT(sig,fftSize,shiftSize)
-%   [specgram,analyWin,sigLen] = STFT(sig,fftSize,shiftSize,winType)
+%   [specgram,analyWin,sigLen] = STFT(sig,fftSize,shiftSize,analyWin)
 %
 % [inputs]
 %          sig: input signal (length x channels)
-%      fftSize: window length [points] in STFT (scalar, even number, default: 1024)
-%    shiftSize: shift length [points] in STFT (scalar, default: fftSize/2)
-%      winType: window function used in STFT (name of window function, default: 'hamming')
+%      fftSize: window length [points] in STFT (scalar, even number)
+%    shiftSize: shift length [points] in STFT (scalar)
+%     analyWin: arbitrary analysis window function in STFT (fftSize x 1) or choose used analysis window function from below:
 %               'hamming'    : Hamming window (default)
 %               'hann'       : von Hann window
 %               'rectangular': rectangular window
@@ -33,9 +31,9 @@ function [specgram,analyWin,sigLen] = STFT(sig,fftSize,shiftSize,winType)
 % Arguments check and set default values
 arguments
     sig (:,:) double
-    fftSize (1,1) double {mustBeInteger(fftSize)} = 1024
-    shiftSize (1,1) double {mustBeInteger(shiftSize)} = fftSize/2
-    winType char {mustBeMember(winType,{'hamming','hann','rectangular','blackman','sine'})} = 'hamming'
+    fftSize (1,1) double {mustBeInteger(fftSize)}
+    shiftSize (1,1) double {mustBeInteger(shiftSize)}
+    analyWin
 end
 
 % Errors check
@@ -43,13 +41,21 @@ end
 if sigLen < nCh; error('The size of input signal might be wrong. The signal must be length x channels size.\n'); end
 if mod(fftSize,2) ~= 0; error('fftSize must be an even number.\n'); end
 if mod(fftSize,shiftSize) ~= 0; error('fftSize must be dividable by shiftSize.\n'); end
-switch winType
-    case 'hamming'; analyWin = local_hamming(fftSize);
-    case 'hann'; analyWin = local_hann(fftSize);
-    case 'rectangular'; analyWin = local_rectangular(fftSize);
-    case 'blackman'; analyWin = local_blackman(fftSize);
-    case 'sine'; analyWin = local_sine(fftSize);
-    otherwise; error('Input winType is not supported. Type "help STFT" and check options.\n');
+if nargin < 4
+    analyWin = local_hamming(fftSize); % default window
+else
+    if isnumeric(analyWin)
+        if size(analyWin, 1) ~= fftSize; error('The length of synthesis window must be the same as fftSize used in STFT.\n'); end
+    else
+        switch analyWin
+            case 'hamming'; analyWin = local_hamming(fftSize);
+            case 'hann'; analyWin = local_hann(fftSize);
+            case 'rectangular'; analyWin = local_rectangular(fftSize);
+            case 'blackman'; analyWin = local_blackman(fftSize);
+            case 'sine'; analyWin = local_sine(fftSize);
+            otherwise; error('Input winType is not supported. Type "help STFT" and check options.\n');
+        end
+    end
 end
 
 % Pad zeros at the beginning and ending of the input signal
