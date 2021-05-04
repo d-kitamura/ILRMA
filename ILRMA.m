@@ -29,7 +29,7 @@ function [estSig, cost] = ILRMA(mixSig, nSrc, sampFreq, nBases, fftSize, shiftSi
 % http://d-kitamura.net/demo-ILRMA_en.html
 %
 % [syntax]
-%   [estSig,cost] = ILRMA(mixSig,nSrc,nBases,fftSize,shiftSize,nIter,type,refMic,applyNormalize,applyWhitening,drawConv)
+%   [estSig,cost] = ILRMA(mixSig,nSrc,sampFreq,nBases,fftSize,shiftSize,windowType,nIter,ilrmaType,refMic,applyNormalize,applyWhitening,drawConv)
 %
 % [inputs]
 %         mixSig: observed mixture (sigLen x nCh)
