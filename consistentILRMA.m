@@ -23,7 +23,7 @@ function [estSig, cost] = consistentILRMA(mixSig, nSrc, sampFreq, nBases, fftSiz
 % http://d-kitamura.net/demo-ILRMA_en.html
 %
 % [syntax]
-%   [estSig,cost] = consistentILRMA(mixSig,nSrc,nBases,fftSize,shiftSize,nIter,type,refMic,applyNormalize,applyWhitening,drawConv)
+%   [estSig,cost] = consistentILRMA(mixSig,nSrc,sampFreq,nBases,fftSize,shiftSize,windowType,nIter,refMic,applyWhitening,drawConv)
 %
 % [inputs]
 %         mixSig: observed mixture (sigLen x nCh)
