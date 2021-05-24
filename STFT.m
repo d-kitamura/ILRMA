@@ -45,7 +45,7 @@ if nargin < 4
     analyWin = local_hamming(fftSize); % default window
 else
     if isnumeric(analyWin)
-        if size(analyWin, 1) ~= fftSize; error('The length of synthesis window must be the same as fftSize used in STFT.\n'); end
+        if size(analyWin, 1) ~= fftSize; error('The length of analysis window must be the same as fftSize.\n'); end
     else
         switch analyWin
             case 'hamming'; analyWin = local_hamming(fftSize);
