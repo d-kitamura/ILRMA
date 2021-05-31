@@ -70,6 +70,9 @@ end
 % Blind source separation based on consistent ILRMA
 % [estSig, cost] = consistentILRMA(mixSig, nSrc, resampFreq, nBases, fftSize, shiftSize, windowType, nIter, refMic, applyWhitening, drawConv);
 
+% Blind source separation based on ILRMA-ISS
+% [estSig, cost] = ILRMAISS(mixSig, nSrc, resampFreq, nBases, fftSize, shiftSize, windowType, nIter, ilrmaType, refMic, applyNormalize, applyWhitening, drawConv);
+
 % Output separated signals
 outputDir = sprintf('./output');
 if ~isdir( outputDir )
