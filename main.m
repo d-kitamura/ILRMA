@@ -44,6 +44,8 @@ windowType = "hamming"; % window function used in STFT
 nBases = 10; % number of bases (for ilrmaType=1, nBases is # of bases for "each" source. for ilrmaType=2, nBases is # of bases for "all" sources)
 nIter = 100; % number of iterations (define by checking convergence behavior with drawConv=true)
 ilrmaType = 1; % 1 or 2 (1: ILRMA w/o partitioning function, 2: ILRMA with partitioning function)
+dofParam = 1; % degree-of-freedom parameter of Student's t distribution (positive value, for t-ILRMA, 1: Cauchy)
+sigDom = 2; % domain of signal for low-rank source model (positive value, for t-ILRMA, 2: power, 1: amplitude) 
 applyNormalize = 1; % 0 or 1 or 2 (0: do not apply normalization in each iteration, 1: apply average-power-based normalization in each iteration to improve numerical stability (the monotonic decrease of the cost function may be lost), 2: apply back projection in each iteration)
 applyWhitening = false; % true or false (true: apply whitening to the observed multichannel spectrograms)
 drawConv = true; % true or false (true: plot cost function values in each iteration and show convergence behavior, false: faster and do not plot cost function values)
@@ -66,6 +68,9 @@ end
 
 % Blind source separation based on ILRMA
 [estSig, cost] = ILRMA(mixSig, nSrc, resampFreq, nBases, fftSize, shiftSize, windowType, nIter, ilrmaType, refMic, applyNormalize, applyWhitening, drawConv);
+
+% Blind source separation based on t-ILRMA
+% [estSig, cost] = tILRMA(mixSig, nSrc, resampFreq, nBases, dofParam, sigDom, fftSize, shiftSize, windowType, nIter, refMic, applyNormalize, applyWhitening, drawConv);
 
 % Blind source separation based on consistent ILRMA
 % [estSig, cost] = consistentILRMA(mixSig, nSrc, resampFreq, nBases, fftSize, shiftSize, windowType, nIter, refMic, applyWhitening, drawConv);
