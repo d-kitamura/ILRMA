@@ -368,12 +368,12 @@ fprintf(' ILRMA2 done.\n');
 end
 
 %% Local function for calculating cost function value in ILRMA
-function [ cost ] = local_calcCostFunction(P, R, W, I, J)
-logDetAbsW = zeros(I,1);
+function cost = local_calcCostFunction(P, R, W, I, J)
+logDetAbsW = zeros(I, 1);
 for i = 1:I
-    logDetAbsW(i,1) = log(max(abs(det(W(:,:,i))), eps));
+    logDetAbsW(i, 1) = log(max(abs(det(W(:, :, i))), eps));
 end
-cost = sum(sum(sum(P./R+log(R),3),2),1) - 2*J*sum(logDetAbsW, 1);
+cost = sum(P./R+log(R), "all") - 2*J*sum(logDetAbsW, 1);
 end
 
 %% Local function for applying whitening
@@ -396,13 +396,13 @@ end
 end
 
 %% Local function for applying back projection and returns frequency-wise coefficients
-function [ D ] = local_backProjection(Y, X, I, N)
-D = zeros(I,N);
+function D = local_backProjection(Y, X, I, N)
+D = zeros(I, N);
 for i = 1:I
-    Yi = squeeze(Y(i,:,:)).'; % N x J
-    D(i,:) = X(i,:,1)*Yi'/(Yi*Yi'); % 1 x N
+    Yi = squeeze(Y(i, :, :)).'; % N x J
+    D(i, :) = X(i, :, 1)*Yi'/(Yi*Yi'); % 1 x N
 end
 D(isnan(D) | isinf(D)) = 0; % replace NaN and Inf to 0
-D = permute(D, [2,3,1]); % N x 1 x I
+D = permute(D, [2, 3, 1]); % N x 1 x I
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% EOF %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
