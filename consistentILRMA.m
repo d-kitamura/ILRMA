@@ -74,7 +74,7 @@ if refMic < 1 || refMic > nCh; error("The reference microphone must be an intege
 
 % Apply whitening (decorrelate X so that the correlation matrix becomes an identity matrix) based on principal component analysis
 if applyWhitening
-    inputMixSpecgram = whitening(mixSpecgram, nSrc); % apply whitening, where dimension is reduced from nCh to nSrc when nSrc < nCh
+    inputMixSpecgram = local_whitening(mixSpecgram, nSrc); % apply whitening, where dimension is reduced from nCh to nSrc when nSrc < nCh
 else
     inputMixSpecgram = mixSpecgram(:,:,1:nSrc); % when nSrc < nCh, only mixSpecgram(:,:,1:nSrc) is input to ILRMA so that the number of microphones equals to the number of sources (determined condition)
 end
@@ -213,6 +213,25 @@ for i = 1:I
     logDetAbsW(i,1) = log(max(abs(det(W(:,:,i))), eps));
 end
 cost = sum(sum(sum(P./R+log(R),3),2),1) - 2*J*sum(logDetAbsW, 1);
+end
+
+%% Local function for applying whitening
+function Y = local_whitening(X, dim)
+[I, J, M] = size(X);
+Y = zeros(I, J, dim);
+for i = 1:I
+    Xi = squeeze(X(i, :, :)).'; % M x J
+    V = Xi*(Xi')/J; % covariance matrix
+    [P, D] = eig(V);
+    % sort eigenvalues and take dim-largest ones
+    eigVal = diag(D);
+    [~, idx] = sort(eigVal, "descend");
+    D = D(idx, idx);
+    P = P(:, idx);
+    D2 = D(1:dim, 1:dim);
+    P2 = P(:, 1:dim);
+    Y(i, :, :) = (sqrt(D2)\(P2')*Xi).';
+end
 end
 
 %% Local function for applying back projection and returns frequency-wise coefficients
