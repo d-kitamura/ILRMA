@@ -93,7 +93,7 @@ end
 [estSpecgram, cost] = local_tILRMA(inputMixSpecgram, nIter, nBases, dofParam, sigDom, applyNormalize, drawConv, mixSpecgram(:,:,refMic));
 
 % Apply back projection (fix the scale ambiguity using the reference microphone channel)
-scaleFixedSepSpecgram = backProjection(estSpecgram, mixSpecgram(:,:,refMic)); % scale-fixed estimated signal
+scaleFixedSepSpecgram = local_backProjectionInit(estSpecgram, mixSpecgram(:,:,refMic)); % scale-fixed estimated signal
 
 % Inverse STFT for each source
 estSig = ISTFT(scaleFixedSepSpecgram, shiftSize, windowInStft, sigLen);
@@ -237,33 +237,41 @@ end
 cost = sum(P./R+log(R), "all") - 2*J*sum(logDetAbsW, 1);
 end
 
-%% Local function for applying whitening
-function Y = local_whitening(X, dim)
-[I, J, M] = size(X);
-Y = zeros(I, J, dim);
-for i = 1:I
-    Xi = squeeze(X(i, :, :)).'; % M x J
-    V = Xi*(Xi')/J; % covariance matrix
-    [P, D] = eig(V);
-    % sort eigenvalues and take dim-largest ones
-    eigVal = diag(D);
-    [~, idx] = sort(eigVal, "descend");
-    D = D(idx, idx);
-    P = P(:, idx);
-    D2 = D(1:dim, 1:dim);
-    P2 = P(:, 1:dim);
-    Y(i, :, :) = (sqrt(D2)\(P2')*Xi).';
+%% Local function for applying initial back projection
+function Z = local_backProjectionInit(Y, X)
+[I, J, M] = size(Y); % frequency bin x time frame x source
+if size(X, 3) == 1 % calculate scale-fixed estimated signals using X(:,:,1)
+    A = zeros(1, M, I);
+    Z = zeros(I, J, M);
+    for i=1:I
+        Yi = squeeze(Y(i, :, :)).'; % channels x frames (M x J)
+        A(1, :, i) = X(i, :, 1)*Yi'/(Yi*Yi');
+    end
+    A(isnan(A) | isinf(A)) = 0; % replace NaN and Inf to 0
+    for m=1:M
+        for i=1:I
+            Z(i, :, m) = A(1, m, i)*Y(i, :, m);
+        end
+    end
+elseif size(X, 3) == M % calculate scale-fixed source images of estimated signals
+    A = zeros(M, M, I);
+    Z = zeros(I, J, M, M); % frequency bin x time frame x source x channel
+    for i=1:I
+        for m=1:M
+            Yi = squeeze(Y(i, :, :)).'; % channels x frames (M x J)
+            A(m, :, i) = X(i, :, m)*Yi'/(Yi*Yi');
+        end
+    end
+    A(isnan(A) | isinf(A)) = 0; % replace NaN and Inf to 0
+    for n=1:M
+        for m=1:M
+            for i=1:I
+                Z(i, :, n, m) = A(m, n, i)*Y(i, :, n);
+            end
+        end
+    end
+else
+    error("The number of channels in X must be 1 or equal to that in Y for back projection.\n");
 end
-end
-
-%% Local function for applying back projection and returns frequency-wise coefficients
-function D = local_backProjection(Y, X, I, N)
-D = zeros(I, N);
-for i = 1:I
-    Yi = squeeze(Y(i, :, :)).'; % N x J
-    D(i, :) = X(i, :, 1)*Yi'/(Yi*Yi'); % 1 x N
-end
-D(isnan(D) | isinf(D)) = 0; % replace NaN and Inf to 0
-D = permute(D, [2, 3, 1]); % N x 1 x I
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% EOF %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
